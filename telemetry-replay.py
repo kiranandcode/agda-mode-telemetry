@@ -101,33 +101,41 @@ def find_db(path: str) -> Path:
     sys.exit(1)
 
 
-def load_session(db_path: Path, session_id: str | None = None) -> tuple[str, list[Step]]:
+def load_session(db_path: Path, session_id: str | None = None,
+                 all_sessions: bool = False) -> tuple[str, list[Step]]:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
 
-    if session_id is None:
-        row = conn.execute(
-            "SELECT session_id FROM events ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
-        if not row:
-            print("No events found.", file=sys.stderr)
-            sys.exit(1)
-        session_id = row["session_id"]
+    if all_sessions:
+        session_id = "all"
+        where_clause = ""
+        where_params: list = []
+    else:
+        if session_id is None:
+            row = conn.execute(
+                "SELECT session_id FROM events ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            if not row:
+                print("No events found.", file=sys.stderr)
+                sys.exit(1)
+            session_id = row["session_id"]
+        where_clause = "WHERE e.session_id = ?"
+        where_params = [session_id]
 
     events = [
         Event(**dict(r))
         for r in conn.execute(
-            "SELECT * FROM events WHERE session_id = ? ORDER BY id",
-            (session_id,),
+            f"SELECT * FROM events e {where_clause} ORDER BY e.id",
+            where_params,
         )
     ]
 
     snapshot_map: dict[int, Snapshot] = {}
     for r in conn.execute(
-        """SELECT s.* FROM snapshots s
-           JOIN events e ON s.event_id = e.id
-           WHERE e.session_id = ?""",
-        (session_id,),
+        f"""SELECT s.* FROM snapshots s
+            JOIN events e ON s.event_id = e.id
+            {where_clause}""",
+        where_params,
     ):
         snapshot_map[r["event_id"]] = Snapshot(
             event_id=r["event_id"], content=r["content"]
@@ -135,11 +143,11 @@ def load_session(db_path: Path, session_id: str | None = None) -> tuple[str, lis
 
     response_map: dict[int, list[Response]] = {}
     for r in conn.execute(
-        """SELECT r.* FROM responses r
-           JOIN events e ON r.event_id = e.id
-           WHERE e.session_id = ?
-           ORDER BY r.event_id, r.sequence""",
-        (session_id,),
+        f"""SELECT r.* FROM responses r
+            JOIN events e ON r.event_id = e.id
+            {where_clause}
+            ORDER BY r.event_id, r.sequence""",
+        where_params,
     ):
         resp = Response(
             event_id=r["event_id"],
@@ -297,7 +305,8 @@ def cmd_replay(args):
     if not sys.stdout.isatty():
         C.disable()
 
-    session_id, all_steps = load_session(find_db(args.path), args.session)
+    session_id, all_steps = load_session(find_db(args.path), args.session,
+                         getattr(args, "all", False))
     steps = filter_steps_by_file(all_steps, getattr(args, "file", None))
     if not steps:
         print("No events in session.", file=sys.stderr)
@@ -367,7 +376,8 @@ def interactive_replay(steps: list[Step], start: int, verbose: bool):
 
 
 def cmd_export(args):
-    session_id, all_steps = load_session(find_db(args.path), args.session)
+    session_id, all_steps = load_session(find_db(args.path), args.session,
+                         getattr(args, "all", False))
     steps = filter_steps_by_file(all_steps, getattr(args, "file", None))
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -405,7 +415,8 @@ def cmd_diff(args):
     if not sys.stdout.isatty():
         C.disable()
 
-    session_id, all_steps = load_session(find_db(args.path), args.session)
+    session_id, all_steps = load_session(find_db(args.path), args.session,
+                         getattr(args, "all", False))
     steps = filter_steps_by_file(all_steps, getattr(args, "file", None))
     idx = args.event - 1
     if idx < 0 or idx >= len(steps):
@@ -429,7 +440,8 @@ def cmd_diff(args):
 
 def cmd_cat(args):
     """Print the buffer state at a specific event."""
-    _, all_steps = load_session(find_db(args.path), args.session)
+    _, all_steps = load_session(find_db(args.path), args.session,
+                         getattr(args, "all", False))
     steps = filter_steps_by_file(all_steps, getattr(args, "file", None))
     idx = args.event - 1
     if idx < 0 or idx >= len(steps):
@@ -447,7 +459,8 @@ def cmd_cat(args):
 def cmd_asciinema(args):
     """Export session as asciicast v2 for asciinema playback.
     Produces one .cast file per file edited in the session."""
-    session_id, all_steps = load_session(find_db(args.path), args.session)
+    session_id, all_steps = load_session(find_db(args.path), args.session,
+                         getattr(args, "all", False))
     if not all_steps:
         print("No events in session.", file=sys.stderr)
         sys.exit(1)
@@ -616,9 +629,11 @@ def main():
     sub = parser.add_subparsers(dest="cmd")
 
     file_help = "Filter to a specific filename (default: all files)"
+    all_help = "Include all sessions (default: latest session only)"
 
     p_replay = sub.add_parser("replay", help="Replay interaction trace")
     p_replay.add_argument("--session", help="Session ID (default: latest)")
+    p_replay.add_argument("--all", action="store_true", help=all_help)
     p_replay.add_argument("--file", help=file_help)
     p_replay.add_argument("--step", action="store_true",
                           help="Interactive step-through mode")
@@ -632,6 +647,7 @@ def main():
     p_export = sub.add_parser("export",
                               help="Export buffer states as individual files")
     p_export.add_argument("--session", help="Session ID (default: latest)")
+    p_export.add_argument("--all", action="store_true", help=all_help)
     p_export.add_argument("--file", help=file_help)
     p_export.add_argument("--output", "-o", default="replay-export",
                           help="Output directory")
@@ -639,16 +655,19 @@ def main():
     p_diff = sub.add_parser("diff", help="Show diff for a specific event")
     p_diff.add_argument("event", type=int, help="Event number")
     p_diff.add_argument("--session", help="Session ID (default: latest)")
+    p_diff.add_argument("--all", action="store_true", help=all_help)
     p_diff.add_argument("--file", help=file_help)
 
     p_cat = sub.add_parser("cat", help="Print buffer state at an event")
     p_cat.add_argument("event", type=int, help="Event number")
     p_cat.add_argument("--session", help="Session ID (default: latest)")
+    p_cat.add_argument("--all", action="store_true", help=all_help)
     p_cat.add_argument("--file", help=file_help)
 
     p_ascii = sub.add_parser("asciinema",
                              help="Export as asciicast v2 (one .cast per file)")
     p_ascii.add_argument("--session", help="Session ID (default: latest)")
+    p_ascii.add_argument("--all", action="store_true", help=all_help)
     p_ascii.add_argument("--file", help="Export only this file")
     p_ascii.add_argument("--output", "-o", default="session.cast",
                          help="Output .cast file (default: session.cast)")
@@ -663,6 +682,7 @@ def main():
     if args.cmd is None:
         args.cmd = "replay"
         args.session = None
+        args.all = False
         args.file = None
         args.step = False
         args.event = None
