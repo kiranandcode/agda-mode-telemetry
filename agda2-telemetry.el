@@ -29,6 +29,9 @@
 (defvar-local agda2-telemetry--pending-responses nil
   "List of (function-name . args-text) from Agda responses in this round.")
 
+(defvar-local agda2-telemetry--last-snapshot nil
+  "Content of the most recently stored snapshot, used to avoid duplicates.")
+
 ;;; --- Database ---
 
 (defun agda2-telemetry--db-path ()
@@ -209,20 +212,23 @@ Installed as :after advice on `agda2-run-last-commands'."
                  agda2-telemetry--db)
         (let ((event-id agda2-telemetry--current-event-id)
               (post-buffer (buffer-string)))
-          ;; Store snapshot if buffer changed
-          (when (and agda2-telemetry--pre-buffer
-                     (not (string= agda2-telemetry--pre-buffer post-buffer)))
-            (let ((diff (agda2-telemetry--compute-diff
-                         agda2-telemetry--pre-buffer post-buffer)))
-              (sqlite-execute
-               agda2-telemetry--db
-               "INSERT INTO snapshots (event_id, content) VALUES (?, ?)"
-               (list event-id post-buffer))
-              (when diff
-                (sqlite-execute
-                 agda2-telemetry--db
-                 "UPDATE events SET extra = ? WHERE id = ?"
-                 (list diff event-id)))))
+          ;; Store snapshot if buffer changed since last stored snapshot
+          (when (or (null agda2-telemetry--last-snapshot)
+                    (not (string= agda2-telemetry--last-snapshot post-buffer)))
+            (sqlite-execute
+             agda2-telemetry--db
+             "INSERT INTO snapshots (event_id, content) VALUES (?, ?)"
+             (list event-id post-buffer))
+            (when (and agda2-telemetry--last-snapshot
+                       (not (string= agda2-telemetry--last-snapshot post-buffer)))
+              (let ((diff (agda2-telemetry--compute-diff
+                           agda2-telemetry--last-snapshot post-buffer)))
+                (when diff
+                  (sqlite-execute
+                   agda2-telemetry--db
+                   "UPDATE events SET extra = ? WHERE id = ?"
+                   (list diff event-id)))))
+            (setq agda2-telemetry--last-snapshot post-buffer))
           ;; Store collected responses
           (let ((seq 0))
             (dolist (resp (nreverse agda2-telemetry--pending-responses))
@@ -306,10 +312,12 @@ Installed as :after advice on `agda2-run-last-commands'."
     (when agda2-telemetry--db
       (agda2-telemetry--log 'session-start)
       (when agda2-telemetry--last-event-id
-        (sqlite-execute
-         agda2-telemetry--db
-         "INSERT INTO snapshots (event_id, content) VALUES (?, ?)"
-         (list agda2-telemetry--last-event-id (buffer-string)))))
+        (let ((content (buffer-string)))
+          (sqlite-execute
+           agda2-telemetry--db
+           "INSERT INTO snapshots (event_id, content) VALUES (?, ?)"
+           (list agda2-telemetry--last-event-id content))
+          (setq agda2-telemetry--last-snapshot content)))))
     (add-hook 'kill-buffer-hook #'agda2-telemetry--close-db nil t)))
 
 (provide 'agda2-telemetry)
