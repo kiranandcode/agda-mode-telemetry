@@ -38,7 +38,9 @@ execution."
    'defun-declarations-alist
    (list 'agda2-command #'agda2--mark-as-safe)))
 
-(defvar agda2-directory (file-name-directory load-file-name)
+(defvar agda2-directory
+  (file-name-directory (or load-file-name buffer-file-name
+                           default-directory))
   "Path to the directory that contains agda2.el(c).")
 
 (add-to-list 'load-path (or agda2-directory (car load-path)))

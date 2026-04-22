@@ -44,6 +44,7 @@ Note that the same version of the Agda executable must be used.")
 (require 'agda2-highlight)
 (require 'agda2-abbrevs)
 (require 'agda2-queue)
+(require 'agda2-telemetry)
 (require 'xref)
 (eval-and-compile
   ;; Load filladapt, if it is installed.
@@ -512,7 +513,9 @@ agda2-include-dirs is not bound." :warning))
  ;; seem to remove the text properties set by the Agda mode.
  (add-hook 'change-major-mode-hook 'agda2-quit nil 'local)
  ;; Enable Xref
- (add-hook 'xref-backend-functions #'agda2-xref-backend -90 t))
+ (add-hook 'xref-backend-functions #'agda2-xref-backend -90 t)
+ ;; Telemetry
+ (agda2-telemetry-setup))
 
 (defun agda2-restart ()
   "Tries to start or restart the Agda process."
