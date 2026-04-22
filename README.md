@@ -1,6 +1,6 @@
 # agda-mode (with telemetry)
 
-Fork of Emacs' agda-mode that records every user interaction in a SQLite database.
+Fork of Emacs' agda-mode with telemetry.
 
 Requires Emacs 29+ (built-in SQLite support).
 
