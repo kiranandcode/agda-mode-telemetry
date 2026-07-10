@@ -317,7 +317,7 @@ Installed as :after advice on `agda2-run-last-commands'."
            agda2-telemetry--db
            "INSERT INTO snapshots (event_id, content) VALUES (?, ?)"
            (list agda2-telemetry--last-event-id content))
-          (setq agda2-telemetry--last-snapshot content)))))
+          (setq agda2-telemetry--last-snapshot content))))
     (add-hook 'kill-buffer-hook #'agda2-telemetry--close-db nil t)))
 
 (provide 'agda2-telemetry)
